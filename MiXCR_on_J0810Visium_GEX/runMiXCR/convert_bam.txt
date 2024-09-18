@@ -1,0 +1,34 @@
+#Automating mixcr to run on every fastq file which corresponds to a non-empty spot on visium slide. 
+#This loop covers all patients except 115_1, which was done separately in test code. 
+#non-empty barcodes are indicatd in file 115_1.barcodes.txt
+# The above script is how I converted bam files to fastq using picardtools
+# You can ignore most of these scripts because a lot of it is just iterating through the thousands of barcodes for ecah file. But for you you can make one loop converting each bam to fq and running mixcr on that file
+#11 May 2022 AAG
+
+#STEP 4 OF 6 MIXCR PROCESSING 
+#1. Obtain all non-empty spot barcodes. Write to file. 
+#2. SplitSam (picard tools) by number of reads if bam size is large. This will help when you run Bamtools. 
+#3. Bamtools for each bam file, split by cell barcode to 1 bam per spot. 
+#4. Convert each bam to fastq file. 
+#5. Put into mixcr shotgun. 
+#6. Combine all mixcr results. 
+
+BARLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/cell-barcodes"
+BAMLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/J0810_data_Visium"
+FQLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/split-fq"
+SAMP="113_1"
+
+	barfile="$BARLOC/$SAMP.barcodes.txt"
+	bamdir="$BAMLOC" #/$SAMP"
+	fprefix="${SAMP}_possorted_genome_bam.TAG_CB_"
+	fqdir="$FQLOC/$SAMP"
+
+	cd ~/picard/build/libs 
+	mkdir $fqdir
+
+	for F in $(cat $barfile); do
+	  INPUT="$bamdir/$fprefix$F-1.bam"
+	  OUTPUT="$fqdir/${SAMP}_$F.fq"
+	  java -jar picard.jar SamToFastq -I ${INPUT} -F ${OUTPUT}
+	  done
+  

@@ -1,0 +1,52 @@
+#Automating mixcr to run on every fastq file which corresponds to a non-empty spot on visium slide. 
+#non-empty barcodes are indicatd in cell-barcodes directory. 
+#Running on samples 113_2 to 114_4. Remainder of samples still being converted to fq.  
+#13 May 2022 AAG
+# I believe mixcr accepts only fq as input, not sure it takes bam. So you need to convert the .bam files to fastq first, then put into mixcr analyze as I have done above
+
+
+#STEP 5 OF 6 MIXCR PROCESSING 
+#1. Obtain all non-empty spot barcodes. Write to file. 
+#2. SplitSam (picard tools) by number of reads if bam size is large. This will help when you run Bamtools. 
+#3. Bamtools for each bam file, split by cell barcode to 1 bam per spot. 
+#4. Convert each bam to fastq file. 
+#5. Put into mixcr shotgun. 
+#6. Combine all mixcr results. 
+
+BARLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/cell-barcodes"
+SAMPS="$BARLOC/sampnames1of2.txt"
+FQLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/split-fq"
+OUTLOC="/media/aag7319/WDBlue/ZZZ_PDAC-Visium/data/mixcr-res/split-bams"
+
+
+for SAMP in $(cat $SAMPS); do
+ 	echo $(date) 
+ 	echo "Working on samp $SAMP..."
+	barfile="$BARLOC/$SAMP.barcodes.txt"
+	fqdir="$FQLOC/$SAMP"
+	fprefix="${SAMP}_possorted_genome_bam.TAG_CB_"
+	outdir="$OUTLOC/$SAMP"
+
+	mkdir $outdir
+	cd $outdir
+
+
+	for F in $(cat $barfile); do
+	  	fname="${SAMP}_$F.fq"
+	  
+	  	mixcr analyze shotgun \
+			 -s hsa \
+			 --starting-material rna \
+			 --only-productive \
+			 --impute-germline-on-export \
+			 --contig-assembly \
+			 --assemble "-ObadQualityThreshold=0" \
+			 --threads 8 \
+			 --report $F \
+			 "$fqdir/$fname" "${F}_mixcr"
+ 
+
+      done
+     echo $(date) 
+     echo "Done with samp $SAMP."
+done
