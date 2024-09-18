@@ -1,6 +1,6 @@
 # Spatial multi-omics of tertiary lymphoid structures in PDAC after neoadjuvant immunotherapy
 
-![image](https://github.com/user-attachments/assets/e910be30-d285-4db4-9727-c3f739bc50e9)
+<img width="803" alt="Screenshot 2024-09-18 at 7 59 26 PM" src="https://github.com/user-attachments/assets/fcda86d0-3ac9-4590-b9ca-68810ecd32c6">
 
 Dimitrios N. Sidiropoulos ... Robert A. Anders, Elana J. Fertig, Luciane T. Kagohara
 
