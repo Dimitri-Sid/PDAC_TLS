@@ -1,0 +1,467 @@
+---
+title: "TLS CHP + Collagen Measurments"
+author: "Daniel Bergman"
+date: "2024-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Setup
+```{r, message=FALSE}
+library("lme4")
+library("tidyverse")
+library("gridExtra")
+library("lmerTest")
+library("ggsignif")
+library(grid)
+
+# set directory
+setwd("~/DimitriProject/R_Analysis/")
+```
+
+## Readme
+Analysis of 200 micron rings around lymphoid aggregates identified by non-pathologist from adjacent sections stained using Masson's Trichrome and H-DAB for CHP.
+
+## Processing the data
+```{r load image analysis data, echo=TRUE}
+# Load the data
+image_data <- read.csv("../QuPathProject/measurments/measurements_all_v2.csv") # output of my analysis of ECM density
+
+# remove unused columns
+image_data$Object.ID <- NULL
+image_data$Object.type <- NULL
+image_data$Classification <- NULL
+image_data$Parent <- NULL
+image_data$ROI <- NULL
+image_data$Perimeter.µm <- NULL
+image_data$Collagen...Positive.area.µm.2 <- NULL
+image_data$Nuclear...Positive.area.µm.2 <- NULL
+
+# get the specimen_id from Image where the image feature os J1568_specimen_id_more_stuff
+# and convert it to an integer called specimen_id
+# e.g. J1568_1234_nonsense -> 1234
+# first copy the Image to specimen_id
+image_data$specimen_id <- image_data$Image
+
+# then strip the beginning J1568_
+image_data$specimen_id <- gsub("J1568_", "", image_data$specimen_id)
+
+# now remove the first "_" and everything after
+image_data$specimen_id <- gsub("_.*", "", image_data$specimen_id)
+
+# convert to integer
+image_data$specimen_id <- as.integer(image_data$specimen_id)
+
+# remove annotaitons with Name WHOLE TISSUE
+image_data <- image_data[image_data$Name != "WHOLE TISSUE",]
+
+# filter on "tight_ring" contained in the Name feature
+image_data <- image_data[grepl("tight_ring", image_data$Name),]
+
+# delete the two features that both begin with "Centroid"
+image_data$Centroid.X.µm <- NULL
+image_data$Centroid.Y.µm <- NULL
+
+# remove a bad TLS (specimen_id = 10733 and Name starts with TLS_weak_5)
+# (this TLS was right on a rip in the H-DAB/CHP stain)
+image_data <- image_data[!(image_data$specimen_id == 10733 & grepl("TLS_weak_5", image_data$Name)),]
+
+# create collagen dataframe by filtering on TrichromeBlue feature being not NA
+collagen_data <- image_data[!is.na(image_data$TrichromeBlue..collagen.area.µm.2),]
+
+# delete the CHP feature of this dataframe
+collagen_data$CHP...Positive.area.µm.2 <- NULL
+
+# create CHP dataframe by filtering on CHP feature being not NA
+
+CHP_data <- image_data[!is.na(image_data$CHP...Positive.area.µm.2),]
+
+# delete the Trichrome feature of this df
+CHP_data$TrichromeBlue..collagen.area.µm.2 <- NULL
+
+# get colnames of CHP_data
+cnames <- colnames(CHP_data)
+
+# remove the CHP...Positive.area.µm.2 element in the cnames list
+cnames <- cnames[cnames != "CHP...Positive.area.µm.2"]
+
+# remove Image from cnames list
+cnames <- cnames[cnames != "Image"]
+
+# do not merge on Area either
+cnames <- cnames[cnames != "Area.µm.2"]
+
+# join these two back on everything escept the CHP and Collagen features
+colnames(CHP_data)
+colnames(collagen_data)
+image_data_final <- merge(CHP_data, collagen_data, by=cnames)
+
+# rename the first area feature to CHP area and the second to Collagen area
+colnames(image_data_final)[colnames(image_data_final) == "Area.µm.2.x"] <- "CHP_annotation_area"
+colnames(image_data_final)[colnames(image_data_final) == "Area.µm.2.y"] <- "Collagen_annotation_area"
+
+# rename the Image.x and Image.y similarly
+colnames(image_data_final)[colnames(image_data_final) == "Image.x"] <- "CHP_image"
+colnames(image_data_final)[colnames(image_data_final) == "Image.y"] <- "Collagen_image"
+
+# rename the CHP...Positive feature thing to CHP_area
+colnames(image_data_final)[colnames(image_data_final) == "CHP...Positive.area.µm.2"] <- "CHP_area"
+
+# same with TrichromeBlue
+colnames(image_data_final)[colnames(image_data_final) == "TrichromeBlue..collagen.area.µm.2"] <- "Collagen_area"
+```
+
+```{r load in survival data, echo=TRUE}
+# read in xlsx file here: J1568_correlative_survival_data_v2.xlsx
+survival_data <- readxl::read_excel("../J1568_correlative_survival_data_v2.xlsx") # survival data
+
+# if specimen is not NA, get characters after the "-" and convert them to an integer called specimen_id
+survival_data$specimen_id <- NA
+for (i in 1:nrow(survival_data)) {
+  specimen <- survival_data$specimen[i]
+  if (!is.na(specimen)) {
+    specimen_id <- as.integer(gsub(".*-", "", specimen))
+    survival_data$specimen_id[i] <- specimen_id
+  }
+}
+
+# remove specimen feature
+survival_data$specimen <- NULL
+
+# get trial arm as first character from swimmer_plot_id
+survival_data$Arm <- NA
+for (i in 1:nrow(survival_data)) {
+  swimmer_plot_id <- survival_data$swimmer_plot_id[i]
+  if (!is.na(swimmer_plot_id)) {
+    trial_arm <- substr(swimmer_plot_id, 1, 1)
+    survival_data$Arm[i] <- trial_arm
+  }
+}
+
+# remove swimmer_plot_id
+survival_data$swimmer_plot_id <- NULL
+```
+
+```{r join data, echo=TRUE}
+# join on specimen_id, every row in image_data_final should have a corresponding row in survival_data
+data <- merge(image_data_final, survival_data, by="specimen_id")
+# check that the join worked
+if (nrow(data) != nrow(image_data_final)) {
+  stop("Join failed")
+}
+```
+
+## Corelation with moderate_path_response
+
+```{r lmer model for moderate_path_response, echo=FALSE}
+mpr_model <- list()
+mpr_model$collagen <- lmer(Collagen_area ~ moderate_path_response + Arm + (1|specimen_id), data=data)
+mpr_model$percent_collagen <- lmer(100*Collagen_area/Collagen_annotation_area ~ moderate_path_response + Arm + (1|specimen_id), data=data)
+
+mpr_model$chp <- lmer(CHP_area ~ moderate_path_response + Arm + (1|specimen_id), data=data)
+mpr_model$percent_chp <- lmer(100*CHP_area/CHP_annotation_area ~ moderate_path_response + Arm + (1|specimen_id), data=data)
+```
+
+```{r summary of models, echo=FALSE}
+mpr_anova <- list()
+mpr_anova$collagen <- anova(mpr_model$collagen)
+mpr_anova$percent_collagen <- anova(mpr_model$percent_collagen)
+mpr_anova$chp <- anova(mpr_model$chp)
+mpr_anova$percent_chp <- anova(mpr_model$percent_chp)
+
+# put the above 4 values into a table/data frame where the row is the feature name of mpr_anova
+# and the column is the Pr(>F) value
+mpr_anova_table <- data.frame(
+  collagen = mpr_anova$collagen$`Pr(>F)`[1],
+  percent_collagen = mpr_anova$percent_collagen$`Pr(>F)`[1],
+  chp = mpr_anova$chp$`Pr(>F)`[1],
+  percent_chp = mpr_anova$percent_chp$`Pr(>F)`[1]
+)
+# display the table noting that this is a table of p-values
+# give the table a name "test"
+colnames(mpr_anova_table) <- c("Collagen", "Percent Collagen", "CHP", "Percent CHP")
+rownames(mpr_anova_table) <- "p-value"
+mpr_anova_table
+
+print("NOTE: The p-values in this table account for the effect of trial arm as well as patient-specific effects. This is in stark contrast to the p-values displayed on the plots below which just compare between moderate path response and no moderate path response.")
+```
+
+```{r use response variable for univariate plots, echo=FALSE}
+mpr_plots <- list()
+
+overall_median <- median(data$Collagen_area)
+mpr_plots$collagen <- ggplot(data, aes(x=moderate_path_response, y=Collagen_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="Collagen area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$collagen)$y$get_limits()
+mpr_plots$collagen <- mpr_plots$collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+# add a line to the above plot at the median for each group
+
+overall_median <- median(100*data$Collagen_area/data$Collagen_annotation_area)
+mpr_plots$percent_collagen <- ggplot(data, aes(x=moderate_path_response, y=100*Collagen_area/Collagen_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="Collagen percent of area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$percent_collagen)$y$get_limits()
+mpr_plots$percent_collagen <- mpr_plots$percent_collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(data$CHP_area)
+mpr_plots$chp <- ggplot(data, aes(x=moderate_path_response, y=CHP_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="CHP area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$chp)$y$get_limits()
+mpr_plots$chp <- mpr_plots$chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(100*data$CHP_area/data$CHP_annotation_area)
+mpr_plots$percent_chp <- ggplot(data, aes(x=moderate_path_response, y=100*CHP_area/CHP_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="CHP percent of area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$percent_chp)$y$get_limits()
+mpr_plots$percent_chp <- mpr_plots$percent_chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+grid.arrange(mpr_plots$collagen, mpr_plots$percent_collagen, mpr_plots$chp, mpr_plots$percent_chp, ncol=2)
+```
+
+```{r mpr using the ratio, echo=FALSE}
+mpr_model$ratio <- lmer((CHP_area/CHP_annotation_area)/(Collagen_area/Collagen_annotation_area) ~ moderate_path_response + Arm + (1|specimen_id), data=data)
+mpr_anova$ratio <- anova(mpr_model$ratio)
+mpr_anova_table$ratio <- mpr_anova$ratio$`Pr(>F)`[1]
+mpr_anova_table
+```
+
+```{r mpr plot using the ratio, echo=FALSE}
+overall_median <- median((data$CHP_area/data$CHP_annotation_area)/(data$Collagen_area/data$Collagen_annotation_area))
+mpr_plots$ratio <- ggplot(data, aes(x=moderate_path_response, y=(CHP_area/CHP_annotation_area)/(Collagen_area/Collagen_annotation_area))) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=2, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="CHP/Collagen ratio") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+mpr_plots$ratio
+```
+
+## Corelation with overall survival
+
+```{r lmer model for overall survival, echo=FALSE}
+os_model <- list()
+os_model$collagen <- lmer(Collagen_area ~ os_event + Arm + (1|specimen_id), data=data)
+os_model$percent_collagen <- lmer(100*Collagen_area/Collagen_annotation_area ~ os_event + Arm + (1|specimen_id), data=data)
+os_model$chp <- lmer(CHP_area ~ os_event + Arm + (1|specimen_id), data=data)
+os_model$percent_chp <- lmer(100*CHP_area/CHP_annotation_area ~ os_event + Arm + (1|specimen_id), data=data)
+
+os_model$ratio <- lmer((CHP_area/CHP_annotation_area)/(Collagen_area/Collagen_annotation_area) ~ os_event + Arm + (1|specimen_id), data=data)
+
+os_anova <- list()
+os_anova$collagen <- anova(os_model$collagen)
+os_anova$percent_collagen <- anova(os_model$percent_collagen)
+os_anova$chp <- anova(os_model$chp)
+os_anova$percent_chp <- anova(os_model$percent_chp)
+os_anova$ratio <- anova(os_model$ratio)
+
+os_anova_table <- data.frame(
+  collagen = os_anova$collagen$`Pr(>F)`[1],
+  percent_collagen = os_anova$percent_collagen$`Pr(>F)`[1],
+  chp = os_anova$chp$`Pr(>F)`[1],
+  percent_chp = os_anova$percent_chp$`Pr(>F)`[1],
+  ratio = os_anova$ratio$`Pr(>F)`[1]
+)
+colnames(os_anova_table) <- c("Collagen", "Percent Collagen", "CHP", "Percent CHP", "Ratio")
+rownames(os_anova_table) <- "p-value"
+os_anova_table
+```
+
+```{r os plots, echo=FALSE}
+os_plots <- list()
+
+overall_median <- median(data$Collagen_area)
+os_plots$collagen <- ggplot(data, aes(x=os_event, y=Collagen_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("No","Yes")), map_signif_level = FALSE) +
+  labs(x="os_event", y="Collagen area") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(os_plots$collagen)$y$get_limits()
+os_plots$collagen <- os_plots$collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(100*data$Collagen_area/data$Collagen_annotation_area)
+os_plots$percent_collagen <- ggplot(data, aes(x=os_event, y=100*Collagen_area/Collagen_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("No","Yes")), map_signif_level = FALSE) +
+  labs(x="os_event", y="Collagen percent of area") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(os_plots$percent_collagen)$y$get_limits()
+os_plots$percent_collagen <- os_plots$percent_collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(data$CHP_area)
+os_plots$chp <- ggplot(data, aes(x=os_event, y=CHP_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("No","Yes")), map_signif_level = FALSE) +
+  labs(x="os_event", y="CHP area") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(os_plots$chp)$y$get_limits()
+os_plots$chp <- os_plots$chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(100*data$CHP_area/data$CHP_annotation_area)
+os_plots$percent_chp <- ggplot(data, aes(x=os_event, y=100*CHP_area/CHP_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("No","Yes")), map_signif_level = FALSE) +
+  labs(x="os_event", y="CHP percent of area") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(os_plots$percent_chp)$y$get_limits()
+os_plots$percent_chp <- os_plots$percent_chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median((data$CHP_area/data$CHP_annotation_area)/(data$Collagen_area/data$Collagen_annotation_area))
+os_plots$ratio <- ggplot(data, aes(x=os_event, y=(CHP_area/CHP_annotation_area)/(Collagen_area/Collagen_annotation_area))) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=2, aes(color=Arm)) +
+  geom_signif(comparisons = list(c("No","Yes")), map_signif_level = FALSE) +
+  labs(x="os_event", y="CHP/Collagen ratio") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+
+grid.arrange(os_plots$collagen, os_plots$percent_collagen, os_plots$chp, os_plots$percent_chp, ncol=2)
+
+os_plots$ratio
+
+```
+
+
+# LME models for moderate path response without accounting for Arm
+
+```{r lmer model for moderate_path_response without ARM, echo=FALSE}
+mpr_model_simple <- list()
+mpr_model_simple$collagen <- lmer(Collagen_area ~ moderate_path_response + (1|specimen_id), data=data)
+mpr_model_simple$percent_collagen <- lmer(100*Collagen_area/Collagen_annotation_area ~ moderate_path_response + (1|specimen_id), data=data)
+
+mpr_model_simple$chp <- lmer(CHP_area ~ moderate_path_response + (1|specimen_id), data=data)
+mpr_model_simple$percent_chp <- lmer(100*CHP_area/CHP_annotation_area ~ moderate_path_response + (1|specimen_id), data=data)
+
+mpr_model_simple$ratio <- lmer((Collagen_area/Collagen_annotation_area)/(CHP_area/CHP_annotation_area) ~ moderate_path_response + (1|specimen_id), data=data)
+```
+
+```{r summary of simple models, echo=FALSE}
+mpr_anova_simple <- list()
+mpr_anova_simple$collagen <- anova(mpr_model_simple$collagen)
+mpr_anova_simple$percent_collagen <- anova(mpr_model_simple$percent_collagen)
+mpr_anova_simple$chp <- anova(mpr_model_simple$chp)
+mpr_anova_simple$percent_chp <- anova(mpr_model_simple$percent_chp)
+mpr_anova_simple$ratio <- anova(mpr_model_simple$ratio)
+
+# put the above 4 values into a table/data frame where the row is the feature name of mpr_anova_simple
+# and the column is the Pr(>F) value
+mpr_anova_simple_table <- data.frame(
+  collagen = mpr_anova_simple$collagen$`Pr(>F)`[1],
+  percent_collagen = mpr_anova_simple$percent_collagen$`Pr(>F)`[1],
+  chp = mpr_anova_simple$chp$`Pr(>F)`[1],
+  percent_chp = mpr_anova_simple$percent_chp$`Pr(>F)`[1],
+  ratio = mpr_anova_simple$ratio$`Pr(>F)`[1]
+)
+# display the table noting that this is a table of p-values
+# give the table a name "test"
+colnames(mpr_anova_simple_table) <- c("Collagen", "Percent Collagen", "CHP", "Percent CHP", "Collagen % / CHP %")
+rownames(mpr_anova_simple_table) <- "p-value"
+mpr_anova_simple_table
+
+print("NOTE: The p-values in this table account for patient-specific effects. This is in stark contrast to the p-values displayed on the plots below which just compare between moderate path response and no moderate path response.")
+```
+
+```{r use response variable for univariate plots with simple models, echo=FALSE}
+mpr_plots <- list()
+
+overall_median <- median(data$Collagen_area)
+mpr_plots$collagen <- ggplot(data, aes(x=moderate_path_response, y=Collagen_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="Collagen area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$collagen)$y$get_limits()
+mpr_plots$collagen <- mpr_plots$collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(100*data$Collagen_area/data$Collagen_annotation_area)
+mpr_plots$percent_collagen <- ggplot(data, aes(x=moderate_path_response, y=100*Collagen_area/Collagen_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="Collagen percent of area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$percent_collagen)$y$get_limits()
+mpr_plots$percent_collagen <- mpr_plots$percent_collagen + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(data$CHP_area)
+mpr_plots$chp <- ggplot(data, aes(x=moderate_path_response, y=CHP_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="CHP area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$chp)$y$get_limits()
+mpr_plots$chp <- mpr_plots$chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+overall_median <- median(100*data$CHP_area/data$CHP_annotation_area)
+mpr_plots$percent_chp <- ggplot(data, aes(x=moderate_path_response, y=100*CHP_area/CHP_annotation_area)) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=0.5) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="CHP percent of area") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+ylims <- layer_scales(mpr_plots$percent_chp)$y$get_limits()
+mpr_plots$percent_chp <- mpr_plots$percent_chp + ylim(ylims[1], ylims[2] + 0.05*(ylims[2]-ylims[1]))
+
+grid.arrange(mpr_plots$collagen, mpr_plots$percent_collagen, mpr_plots$chp, mpr_plots$percent_chp, ncol=2)
+
+overall_median <- median((data$Collagen_area/data$Collagen_annotation_area)/(data$CHP_area/data$CHP_annotation_area))
+mpr_plots$ratio <- ggplot(data, aes(x=moderate_path_response, y=(Collagen_area/Collagen_annotation_area)/(CHP_area/CHP_annotation_area))) +
+  geom_violin() +
+  geom_jitter(width=0.25, size=2) +
+  geom_signif(comparisons = list(c("0", "1")), map_signif_level = FALSE) +
+  labs(x="moderate_path_response", y="Collagen %/CHP %") + 
+  stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "black", size = 0.25) +
+  geom_hline(yintercept = overall_median, linetype = "dashed", color = "darkgrey", size = 0.5)
+mpr_plots$ratio
+
+fig_folder = "./figs"
+# loop over the plots and save them to a file
+for (name in names(mpr_plots)) {
+  ggsave(paste0(fig_folder, "/mpr_simple_", name, ".pdf"), mpr_plots[[name]], width=3, height=3.3)
+}
+```
+
+
+# TLS counts by Arm
+
+```{r print table of TLS and arms, echo=FALSE}
+# in data data.frame, count frequency of factors in Arm feature; store in a data.frame/table with two columns: Arm, # of TLSs
+df = data.frame(table(data$Arm))
+colnames(df) <- c("Arm", "# TLSs")
+df
+```
