@@ -6,6 +6,6 @@ Dimitrios N. Sidiropoulos ... Robert A. Anders, Elana J. Fertig, Luciane T. Kago
 
 Here, we provide a spatial multi-omics atlas of PDAC tumors from a series of immunotherapy neoadjuvant clinical trials. Intratumorally, pathologic responders exhibit mature TLS that propagate plasma cells into malignant niches. Our findings offer insights on the role of TLS-associated humoral immunity and stromal remodeling during immunotherapy treatment.
 
-Data are made available through [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE277116)
+Data are made available through [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE277116) and Zenodo doi: 10.5281/zenodo.13764
 
 For any questions please email sdimitri [at] jhmi.edu
