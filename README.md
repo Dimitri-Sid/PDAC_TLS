@@ -3,7 +3,7 @@
 <img width="652" alt="Screenshot 2024-09-18 at 8 03 50 PM" src="https://github.com/user-attachments/assets/67f010c0-a061-465e-9b12-f078a86195af">
 
 Dimitrios N. Sidiropoulos ... Robert A. Anders, Elana J. Fertig, Luciane T. Kagohara
-[CIR] (https://aacrjournals.org/cancerimmunolres/article-abstract/13/11/1716/766802/Neoadjuvant-Immunotherapy-Promotes-the-Formation?redirectedFrom=fulltext)  
+[CIR](https://aacrjournals.org/cancerimmunolres/article-abstract/13/11/1716/766802/Neoadjuvant-Immunotherapy-Promotes-the-Formation?redirectedFrom=fulltext)  
 doi: 10.1158/2326-6066.CIR-25-0387
 
 Here, we provide a spatial multi-omics atlas of PDAC tumors from a series of immunotherapy neoadjuvant clinical trials. Intratumorally, pathologic responders exhibit mature TLS that propagate plasma cells into malignant niches. Our findings offer insights on the role of TLS-associated humoral immunity and stromal remodeling during immunotherapy treatment.
